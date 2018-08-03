@@ -16,22 +16,83 @@ subtitle: Women's E-Commerce Clothing Reviews
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
+```{r message=FALSE, warning=FALSE}
+library(ggplot2)
+library(data.table)
+library(dplyr)
+library(ggthemes)
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+#library(caret)
+#library(glmnet)
+#library(ROCR)
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
 
-```{r cars}
-summary(cars)
 ```
 
-## Including Plots
 
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r}
+data <- fread("data.csv")
+#data <- data[ ,c("comments", "state","work_interfere") := NULL]
+data[, Age := as.integer(Age)]
+#data[ , treatment := factor(treatment, levels = c("Yes", "No"))]
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+glimpse(data)
+```
+
+check missing values
+
+```{r}
+sapply(data, function(x) sum(is.na(x)))
+```
+
+check empty strings
+
+```{r}
+sapply(data[, 1:11], function(x) sum(x == ''))
+```
+
+```{r}
+names(data)
+```
+
+
+remove the first column which is unnecessary and rename the columns
+```{r}
+data <- data[, V1 := NULL]
+colnames(data) <- c('ID', 'Age', 'Title', 'Review', 'Rating', 'Recommend', 'Liked', 'Division', 'Dept', 'Class')
+```
+
+
+```{r}
+ggplot(data.frame(prop.table(table(data$Dept))), aes(x=Var1, y = Freq*100)) + 
+  geom_bar(stat = 'identity') + xlab('Department Name') + 
+  ylab('Percentage of Reviews/Ratings (%)') + 
+  geom_text(aes(label=round(Freq*100,2)), vjust=-0.25) + 
+  ggtitle('Percentage of Reviews By Department') +
+  theme_fivethirtyeight() + scale_fill_grey()
+  
+```
+
+
+
+```{r}
+#ratings percentage by Department
+phisto <- data %>% 
+  filter(!is.na(Dept), Dept != 'Trend') %>% 
+  mutate(Dept = factor(Dept)) %>% group_by(Dept) %>% 
+  count(Rating) %>% 
+  mutate(perc = n/sum(n))
+phisto %>% 
+  ggplot(aes(x=Rating, y = perc*100, fill = Dept)) + 
+  geom_bar(stat = 'identity', show.legend = FALSE) + 
+  facet_wrap(~Dept) + ylab('Percentage of reviews (%)') + 
+  geom_text(aes(label=round(perc*100,2)))
+```
+
+
+
+
+
+
