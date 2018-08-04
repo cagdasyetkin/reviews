@@ -66,10 +66,11 @@ colnames(data) <- c('ID', 'Age', 'Title', 'Review', 'Rating', 'Recommend', 'Like
 
 
 ```{r}
-ggplot(data.frame(prop.table(table(data$Dept))), aes(x=Var1, y = Freq*100)) + 
+ggplot(data.frame(prop.table(table(as.factor(data$Dept)))), aes(x=Var1, y = Freq*100)) + 
   geom_bar(stat = 'identity') + xlab('Department Name') + 
   ylab('Percentage of Reviews/Ratings (%)') + 
   geom_text(aes(label=round(Freq*100,2)), vjust=-0.25) + 
+  coord_flip() +
   ggtitle('Percentage of Reviews By Department') +
   theme_fivethirtyeight() + scale_fill_grey()
   
@@ -89,6 +90,225 @@ phisto %>%
   geom_bar(stat = 'identity', show.legend = FALSE) + 
   facet_wrap(~Dept) + ylab('Percentage of reviews (%)') + 
   geom_text(aes(label=round(perc*100,2)))
+```
+
+```{r}
+data %>%
+  group_by(Dept) %>%
+  summarize(n_reviews = n_distinct(ID)) %>%
+  ggplot(aes(Dept, n_reviews)) +
+  geom_col() +
+  coord_flip()
+  
+```
+
+
+```{r}
+library(tidytext)
+library(stringr)
+
+usenet_words <- data %>%
+  unnest_tokens(word, Review) %>%
+  filter(str_detect(word, "[a-z']$"),
+         !word %in% stop_words$word)
+```
+
+
+```{r}
+usenet_words %>%
+  group_by(Dept) %>%
+  count(word, sort = TRUE) %>%
+  arrange(desc(n))
+```
+
+```{r}
+words_by_dept <- usenet_words %>%
+  count(Dept, word, sort = TRUE) %>%
+  ungroup()
+
+words_by_dept
+```
+
+
+```{r}
+tf_idf <- words_by_dept %>%
+  bind_tf_idf(word, Dept, n) %>%
+  arrange(desc(tf_idf))
+
+tf_idf
+```
+
+```{r}
+tf_idf %>%
+  #filter(str_detect(Dept, "^sci\\.")) %>%
+  group_by(Dept) %>%
+  top_n(12, tf_idf) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, tf_idf)) %>%
+  ggplot(aes(word, tf_idf, fill = Dept)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ Dept, scales = "free") +
+  ylab("tf-idf") +
+  coord_flip()
+```
+
+
+```{r}
+library(widyr)
+
+dept_cors <- words_by_dept %>%
+  pairwise_cor(Dept, word, n, sort = TRUE)
+
+dept_cors
+```
+
+```{r}
+library(ggraph)
+library(igraph)
+set.seed(2017)
+
+dept_cors %>%
+  filter(correlation > .7) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(alpha = correlation/10, width = correlation/100)) +
+  geom_node_point(size = 6, color = "lightblue") +
+  geom_node_text(aes(label = name), repel = TRUE) +
+  theme_void()
+```
+
+
+```{r}
+library(tidyr)
+# include only words that occur at least 50 times
+word_dept <- usenet_words %>%
+  #filter(str_detect(newsgroup, "^sci")) %>%
+  group_by(word) %>%
+  mutate(word_total = n()) %>%
+  ungroup() %>%
+  filter(word_total > 50)
+
+
+# convert into a document-term matrix
+# with document names such as sci.crypt_14147
+sci_dtm <- word_dept %>%
+  unite(document, Dept, ID) %>%
+  count(document, word) %>%
+  cast_dtm(document, word, n)
+```
+
+```{r}
+library(topicmodels)
+sci_lda <- LDA(sci_dtm, k = 4, control = list(seed = 2016))
+```
+
+
+```{r}
+sci_lda %>%
+  tidy() %>%
+  group_by(topic) %>%
+  top_n(8, beta) %>%
+  ungroup() %>%
+  mutate(term = reorder(term, beta)) %>%
+  ggplot(aes(term, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free_y") +
+  coord_flip()
+```
+
+```{r}
+sci_lda %>%
+  tidy(matrix = "gamma") %>%
+  separate(document, c("Dept", "ID"), sep = "_") %>%
+  mutate(Dept = reorder(Dept, gamma * topic)) %>%
+  ggplot(aes(factor(topic), gamma)) +
+  geom_boxplot() +
+  facet_wrap(~ Dept) +
+  labs(x = "Topic",
+       y = "# of messages where this was the highest % topic")
+```
+
+```{r}
+dept_sentiments <- words_by_dept %>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  group_by(Dept) %>%
+  summarize(score = sum(score * n) / sum(n))
+
+dept_sentiments %>%
+  mutate(Dept = reorder(Dept, score)) %>%
+  ggplot(aes(Dept, score, fill = score > 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  ylab("Average sentiment score")
+```
+
+
+```{r}
+contributions <- word_dept %>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  group_by(word) %>%
+  summarize(occurences = n(),
+            contribution = sum(score))
+
+contributions
+```
+
+```{r}
+contributions %>%
+  top_n(25, abs(contribution)) %>%
+  mutate(word = reorder(word, contribution)) %>%
+  ggplot(aes(word, contribution, fill = contribution > 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip()
+```
+
+
+```{r}
+top_sentiment_words <- words_by_dept %>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  mutate(contribution = score * n / sum(n))
+
+top_sentiment_words
+```
+
+```{r}
+top_sentiment_words %>%
+  top_n(25, abs(contribution)) %>%
+  mutate(word = reorder(word, contribution)) %>%
+  ggplot(aes(word, contribution, fill = contribution > 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() 
+```
+
+```{r}
+sentiment_messages <- word_dept %>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  group_by(Dept, ID) %>%
+  summarize(sentiment = mean(score),
+            words = n()) %>%
+  ungroup() %>%
+  filter(words >= 5)
+```
+
+```{r}
+sentiment_messages %>%
+  arrange(desc(sentiment))
+```
+
+```{r}
+print_message <- function(Dept, message_id) {
+  result <- data %>%
+    filter(Dept == Dept, ID == message_id, Review != "")
+  
+  cat(result$Review, sep = "\n")
+}
+
+print_message("Bottoms", 271)
+```
+
+```{r}
+sentiment_messages %>%
+  arrange(sentiment)
 ```
 
 
